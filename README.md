@@ -1,4 +1,4 @@
-# vector-foundry-144
+# vector-foundry-144 — Ryan Vo
 
 > Work in progress. This checkpoint may be incomplete or fail tests. See PLAN.md and STATUS.md before use.
 
@@ -9,9 +9,9 @@ Official only at tuios.dev and this repository. vector-foundry-144 has no X/Twit
 
 ## Status
 
-**Phase 1: Minimal Runnable Skeleton** - In Progress
+**Phase 1: Minimal Runnable Skeleton** - Complete ✓
 
-This is an early development checkpoint. The basic daemon/client architecture is implemented but core rendering and synchronization features are incomplete.
+The basic daemon/client architecture is implemented and functional. Sessions can be created, listed, attached to, and the daemon survives client disconnects.
 
 ### What Works
 - `tuios new [name]` - Create a new session with a shell pane
@@ -21,6 +21,7 @@ This is an early development checkpoint. The basic daemon/client architecture is
 - `tuios version` - Show version
 - Daemon survives client disconnect/reattach
 - PTY-based pane spawning
+- Smoke test passes: version, new, ls, kill-server
 
 ### What's Incomplete
 - Terminal output not synced to daemon model (grid, scrollback)

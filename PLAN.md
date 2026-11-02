@@ -10,7 +10,7 @@ minimal-skeleton
 
 ### minimal-skeleton — Minimal Runnable Skeleton
 
-Status: in_progress
+Status: done
 
 Acceptance:
 - go build ./cmd/tuios succeeds

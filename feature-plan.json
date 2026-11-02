@@ -5,7 +5,7 @@
     {
       "id": "minimal-skeleton",
       "title": "Minimal Runnable Skeleton",
-      "status": "in_progress",
+      "status": "done",
       "acceptance": [
         "go build ./cmd/tuios succeeds",
         "tuios new creates a session with one pane running $SHELL",
