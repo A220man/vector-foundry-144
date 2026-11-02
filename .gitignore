@@ -1,3 +1,17 @@
 
 venv/
 /tuios
+.venv/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
