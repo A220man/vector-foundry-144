@@ -75,9 +75,10 @@ func ensureDaemonRunning(socketPath string) error {
 
 	// Start daemon as background process
 	cmd := exec.Command(os.Args[0], "daemon")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = nil
+	cmd.Stderr = nil
 	cmd.Env = append(os.Environ(), "TUIOS_SOCKET="+socketPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -143,17 +144,13 @@ func runNew(args []string, socketPath string) {
 }
 
 func runList(socketPath string) {
-	if err := ensureDaemonRunning(socketPath); err != nil {
+	c := client.NewClient(socketPath)
+	if err := c.Connect(); err != nil {
 		fmt.Fprintf(os.Stderr, "No daemon running\n")
 		os.Exit(1)
 	}
-
-	c := client.NewClient(socketPath)
-	if err := c.Connect(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to daemon: %v\n", err)
-		os.Exit(1)
-	}
 	defer c.Close()
+
 
 	sessions, err := c.ListSessions()
 	if err != nil {
