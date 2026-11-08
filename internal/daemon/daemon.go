@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -134,6 +135,16 @@ func (d *Daemon) handleMessage(clientID string, conn *ipc.Conn, msg ipc.Message)
 		return d.handleInput(clientID, conn, msg)
 	case ipc.MsgSetAgentQuiet:
 		return d.handleSetAgentQuiet(clientID, conn, msg)
+	case ipc.MsgSplitWindow:
+		return d.handleSplitWindow(clientID, conn, msg)
+	case ipc.MsgResizePane:
+		return d.handleResizePane(clientID, conn, msg)
+	case ipc.MsgFocusPane:
+		return d.handleFocusPane(clientID, conn, msg)
+	case ipc.MsgSwitchWorkspace:
+		return d.handleSwitchWorkspace(clientID, conn, msg)
+	case ipc.MsgListWorkspaces:
+		return d.handleListWorkspaces(clientID, conn, msg)
 	default:
 		return fmt.Errorf("unknown message type: %s", msg.Type)
 	}
@@ -773,6 +784,280 @@ func (d *Daemon) handleSetAgentQuiet(clientID string, conn *ipc.Conn, msg ipc.Me
 		}
 	}
 	return fmt.Errorf("window not found")
+}
+func (d *Daemon) handleSplitWindow(clientID string, conn *ipc.Conn, msg ipc.Message) error {
+	var payload ipc.SplitWindowPayload
+	json.Unmarshal(msg.Payload, &payload)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	session, ok := d.sessions[payload.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found")
+	}
+
+	wsID := session.ActiveWS
+	ws := session.Workspaces[wsID]
+	if ws == nil {
+		return fmt.Errorf("workspace not found")
+	}
+
+	// Find target window
+	var targetWindow *model.Window
+	for _, w := range ws.Windows {
+		if w.ID == payload.WindowID {
+			targetWindow = w
+			break
+		}
+	}
+	if targetWindow == nil {
+		return fmt.Errorf("target window not found")
+	}
+
+	// Create new window
+	windowID := fmt.Sprintf("window-%d", d.nextWindowID)
+	d.nextWindowID++
+
+	cmd := payload.Command
+	if cmd == "" {
+		cmd = os.Getenv("SHELL")
+	}
+
+	newWindow := d.createWindow(payload.SessionID, wsID, windowID, cmd)
+	if newWindow == nil {
+		return fmt.Errorf("failed to create window")
+	}
+
+	ws.Windows[windowID] = newWindow
+
+	// Find the pane node containing the target window and split it
+	ws.Root = d.splitPaneNode(ws.Root, payload.WindowID, newWindow, payload.Direction == "h", payload.Ratio)
+
+	resp := ipc.Message{
+		Type: ipc.MsgOK,
+		ID:   msg.ID,
+		Payload: mustMarshal(map[string]string{"window_id": windowID}),
+	}
+	return conn.Send(resp)
+}
+
+func (d *Daemon) splitPaneNode(root *model.PaneNode, targetWindowID string, newWindow *model.Window, horizontal bool, ratio float64) *model.PaneNode {
+	if root == nil {
+		return &model.PaneNode{Leaf: newWindow}
+	}
+
+	if root.Leaf != nil && root.Leaf.ID == targetWindowID {
+		// Found target, create split
+		return &model.PaneNode{
+			Split: &model.SplitNode{
+				Horizontal: horizontal,
+				Ratio:      ratio,
+				Children: [2]*model.PaneNode{
+					root,
+					{Leaf: newWindow},
+				},
+			},
+		}
+	}
+
+	if root.Split != nil {
+		// Recurse into children
+		newChildren := [2]*model.PaneNode{
+			d.splitPaneNode(root.Split.Children[0], targetWindowID, newWindow, horizontal, ratio),
+			d.splitPaneNode(root.Split.Children[1], targetWindowID, newWindow, horizontal, ratio),
+		}
+		return &model.PaneNode{
+			Split: &model.SplitNode{
+				Horizontal: root.Split.Horizontal,
+				Ratio:      root.Split.Ratio,
+				Children:   newChildren,
+			},
+		}
+	}
+
+	return root
+}
+
+func (d *Daemon) handleResizePane(clientID string, conn *ipc.Conn, msg ipc.Message) error {
+	var payload ipc.ResizePanePayload
+	json.Unmarshal(msg.Payload, &payload)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	session, ok := d.sessions[payload.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found")
+	}
+
+	ws := session.Workspaces[session.ActiveWS]
+	if ws == nil {
+		return fmt.Errorf("workspace not found")
+	}
+
+	// Find the split node containing the window and adjust its ratio
+	ws.Root = d.resizePaneNode(ws.Root, payload.WindowID, payload.Delta, payload.Direction)
+
+	resp := ipc.Message{Type: ipc.MsgOK, ID: msg.ID}
+	return conn.Send(resp)
+}
+
+func (d *Daemon) resizePaneNode(root *model.PaneNode, targetWindowID string, delta int, direction string) *model.PaneNode {
+	if root == nil {
+		return nil
+	}
+
+	if root.Leaf != nil && root.Leaf.ID == targetWindowID {
+		// Can't resize a leaf directly, need to find parent split
+		return root
+	}
+
+	if root.Split != nil {
+		// Check if target is in left/top child
+		leftHasTarget := d.paneContains(root.Split.Children[0], targetWindowID)
+		rightHasTarget := d.paneContains(root.Split.Children[1], targetWindowID)
+
+		if leftHasTarget || rightHasTarget {
+			// Adjust ratio
+			if direction == "h" && root.Split.Horizontal {
+				root.Split.Ratio = math.Max(0.1, math.Min(0.9, root.Split.Ratio+float64(delta)/100.0))
+			} else if direction == "v" && !root.Split.Horizontal {
+				root.Split.Ratio = math.Max(0.1, math.Min(0.9, root.Split.Ratio+float64(delta)/100.0))
+			}
+		}
+
+		newChildren := [2]*model.PaneNode{
+			d.resizePaneNode(root.Split.Children[0], targetWindowID, delta, direction),
+			d.resizePaneNode(root.Split.Children[1], targetWindowID, delta, direction),
+		}
+		return &model.PaneNode{
+			Split: &model.SplitNode{
+				Horizontal: root.Split.Horizontal,
+				Ratio:      root.Split.Ratio,
+				Children:   newChildren,
+			},
+		}
+	}
+
+	return root
+}
+
+func (d *Daemon) paneContains(node *model.PaneNode, windowID string) bool {
+	if node == nil {
+		return false
+	}
+	if node.Leaf != nil {
+		return node.Leaf.ID == windowID
+	}
+	if node.Split != nil {
+		return d.paneContains(node.Split.Children[0], windowID) || d.paneContains(node.Split.Children[1], windowID)
+	}
+	return false
+}
+
+func (d *Daemon) handleFocusPane(clientID string, conn *ipc.Conn, msg ipc.Message) error {
+	var payload ipc.FocusPanePayload
+	json.Unmarshal(msg.Payload, &payload)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	session, ok := d.sessions[payload.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found")
+	}
+
+	ws := session.Workspaces[session.ActiveWS]
+	if ws == nil {
+		return fmt.Errorf("workspace not found")
+	}
+
+	// Find window and set as focused
+	for _, w := range ws.Windows {
+		if w.ID == payload.WindowID {
+			ws.Focused = w
+			resp := ipc.Message{Type: ipc.MsgOK, ID: msg.ID}
+			return conn.Send(resp)
+		}
+	}
+
+	return fmt.Errorf("window not found")
+}
+
+func (d *Daemon) handleSwitchWorkspace(clientID string, conn *ipc.Conn, msg ipc.Message) error {
+	var payload ipc.SwitchWorkspacePayload
+	json.Unmarshal(msg.Payload, &payload)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	session, ok := d.sessions[payload.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found")
+	}
+
+	if payload.Workspace < 1 || payload.Workspace > 9 {
+		return fmt.Errorf("workspace must be 1-9")
+	}
+
+	session.ActiveWS = payload.Workspace
+
+	// Create workspace if it doesn't exist
+	if session.Workspaces[payload.Workspace] == nil {
+		session.Workspaces[payload.Workspace] = &model.Workspace{
+			ID:      payload.Workspace,
+			Windows: make(map[string]*model.Window),
+		}
+	}
+
+	resp := ipc.Message{Type: ipc.MsgOK, ID: msg.ID}
+	return conn.Send(resp)
+}
+
+func (d *Daemon) handleListWorkspaces(clientID string, conn *ipc.Conn, msg ipc.Message) error {
+	var payload ipc.ListWorkspacesPayload
+	json.Unmarshal(msg.Payload, &payload)
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	session, ok := d.sessions[payload.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found")
+	}
+
+	var workspaces []ipc.WorkspaceInfo
+	for i := 1; i <= 9; i++ {
+		ws := session.Workspaces[i]
+		if ws != nil && len(ws.Windows) > 0 {
+			windowIDs := make([]string, 0, len(ws.Windows))
+			for id := range ws.Windows {
+				windowIDs = append(windowIDs, id)
+			}
+			workspaces = append(workspaces, ipc.WorkspaceInfo{
+				ID:        i,
+				Active:    i == session.ActiveWS,
+				WindowIDs: windowIDs,
+			})
+		} else if i == session.ActiveWS {
+			workspaces = append(workspaces, ipc.WorkspaceInfo{
+				ID:        i,
+				Active:    true,
+				WindowIDs: []string{},
+			})
+		}
+	}
+
+	resp := ipc.Message{
+		Type: ipc.MsgOK,
+		ID:   msg.ID,
+		Payload: mustMarshal(ipc.ListWorkspacesResponse{
+			Workspaces: workspaces,
+			Active:     session.ActiveWS,
+		}),
+	}
+	return conn.Send(resp)
 }
 
 func mustMarshal(v interface{}) json.RawMessage {
