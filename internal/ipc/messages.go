@@ -26,6 +26,12 @@ const (
 	MsgAttentionItem  = "attention_item"
 	MsgError          = "error"
 	MsgOK             = "ok"
+	MsgSplitWindow    = "split_window"
+	MsgResizePane     = "resize_pane"
+	MsgFocusPane      = "focus_pane"
+	MsgSwitchWorkspace = "switch_workspace"
+	MsgListWorkspaces  = "list_workspaces"
+	MsgPaneTree       = "pane_tree"
 )
 
 type NewSessionPayload struct {
@@ -102,6 +108,64 @@ type AttentionAction struct {
 	Label string            `json:"label"`
 	Verb  string            `json:"verb"`
 	Args  map[string]string `json:"args,omitempty"`
+}
+
+type SplitWindowPayload struct {
+	SessionID    string  `json:"session_id"`
+	WindowID     string  `json:"window_id"`
+	Direction    string  `json:"direction"`
+	Ratio        float64 `json:"ratio"`
+	Command      string  `json:"command,omitempty"`
+}
+
+type ResizePanePayload struct {
+	SessionID string  `json:"session_id"`
+	WindowID  string  `json:"window_id"`
+	Delta     int     `json:"delta"`
+	Direction string  `json:"direction"`
+}
+
+type FocusPanePayload struct {
+	SessionID string `json:"session_id"`
+	WindowID  string `json:"window_id"`
+}
+
+type SwitchWorkspacePayload struct {
+	SessionID string `json:"session_id"`
+	Workspace int    `json:"workspace"`
+}
+
+type ListWorkspacesPayload struct {
+	SessionID string `json:"session_id"`
+}
+
+type WorkspaceInfo struct {
+	ID        int      `json:"id"`
+	Active    bool     `json:"active"`
+	WindowIDs []string `json:"window_ids"`
+}
+
+type ListWorkspacesResponse struct {
+	Workspaces []WorkspaceInfo `json:"workspaces"`
+	Active     int             `json:"active"`
+}
+
+type PaneTreePayload struct {
+	SessionID  string         `json:"session_id"`
+	Workspace  int            `json:"workspace"`
+	Root       *PaneTreeNode  `json:"root"`
+}
+
+type PaneTreeNode struct {
+	Split      *SplitNode     `json:"split,omitempty"`
+	WindowID   string         `json:"window_id,omitempty"`
+	Focused    bool           `json:"focused,omitempty"`
+}
+
+type SplitNode struct {
+	Horizontal bool           `json:"horizontal"`
+	Ratio      float64        `json:"ratio"`
+	Children   [2]*PaneTreeNode `json:"children"`
 }
 
 type SetAgentQuietPayload struct {
