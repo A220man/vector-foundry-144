@@ -2,11 +2,11 @@
 
 Work in progress; not a release-readiness or successful QA claim.
 
-Version: 1.4.0
+Version: 1.5.0
 
 ## Outstanding findings
 
-No configured provider completed this phase (exit 1); checkout retained for automatic retry
+Repair this preserved checkpoint. Previous failure: No configured provider completed this phase (exit 1); checkout retained for automatic retry
 
 ## Next round
 

@@ -20,3 +20,4 @@ __pycache__/
 .env.local
 .env.*.local
 **/data/media/
+.venv*/

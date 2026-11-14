@@ -45,7 +45,7 @@ func main() {
 	case "kill-server":
 		runKillServer(socketPath)
 	case "version":
-    fmt.Println("vector-foundry-144 1.3.0")
+		fmt.Println("vector-foundry-144 0.1.0")
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
 		printUsage()
