@@ -134,6 +134,30 @@ func (c *Client) Attach(sessionID, windowID string, cols, rows int) error {
 	return c.eventLoop()
 }
 
+
+func (c *Client) Split(sessionID, windowID, direction string, ratio float64) error {
+	msg := ipc.Message{
+		Type: ipc.MsgSplitWindow,
+		Payload: mustMarshal(ipc.SplitWindowPayload{
+			SessionID:  sessionID,
+			WindowID:  windowID,
+			Direction: direction,
+			Ratio:     ratio,
+		}),
+	}
+	if err := c.ipcConn.Send(msg); err != nil {
+		return err
+	}
+
+	resp, err := c.ipcConn.Recv()
+	if err != nil {
+		return err
+	}
+	if resp.Type == ipc.MsgError {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
+}
 func (c *Client) handleResize() {
 	ws, err := getWinsize()
 	if err == nil {
