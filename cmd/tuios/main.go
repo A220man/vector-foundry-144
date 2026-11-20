@@ -43,6 +43,8 @@ func main() {
 	case "attach":
 		runAttach(args, socketPath)
 	case "kill-server":
+	case "split":
+		runSplit(args, socketPath)
 		runKillServer(socketPath)
 	case "version":
 		fmt.Println("vector-foundry-144 0.1.0")
@@ -143,6 +145,55 @@ func runNew(args []string, socketPath string) {
 	fmt.Println(sessionID)
 }
 
+func runSplit(args []string, socketPath string) {
+	fs := flag.NewFlagSet("split", flag.ExitOnError)
+	windowID := fs.String("window", "", "Window ID to split (required)")
+	direction := fs.String("direction", "h", "Split direction: h for horizontal, v for vertical")
+	ratio := fs.Float64("ratio", 0.5, "Split ratio (0.1-0.9)")
+	fs.Parse(args)
+
+	if *windowID == "" {
+		fmt.Fprintf(os.Stderr, "Error: --window is required\n")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	if *direction != "h" && *direction != "v" {
+		fmt.Fprintf(os.Stderr, "Error: direction must be h or v\n")
+		fs.Usage()
+		os.Exit(1)
+	}
+	if *ratio < 0.1 || *ratio > 0.9 {
+		fmt.Fprintf(os.Stderr, "Error: ratio must be between 0.1 and 0.9\n")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	if err := ensureDaemonRunning(socketPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start daemon: %v\n", err)
+		os.Exit(1)
+	}
+
+	c := client.NewClient(socketPath)
+	if err := c.Connect(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to connect to daemon: %v\n", err)
+		os.Exit(1)
+	}
+	defer c.Close()
+
+	// Get the session ID - list sessions and use the first one
+	sessions, err := c.ListSessions()
+	if err != nil || len(sessions) == 0 {
+		fmt.Fprintf(os.Stderr, "Failed to list sessions: %v\n", err)
+		os.Exit(1)
+	}
+	sessionID := sessions[0].ID
+
+	if err := c.Split(sessionID, *windowID, *direction, *ratio); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to split window: %v\n", err)
+		os.Exit(1)
+	}
+}
 func runList(socketPath string) {
 	c := client.NewClient(socketPath)
 	if err := c.Connect(); err != nil {
