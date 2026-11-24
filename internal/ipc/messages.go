@@ -69,8 +69,9 @@ type GridDiff struct {
 }
 
 type CellUpdate struct {
-	Row, Col int        `json:"row,col"`
-	Cell     model.Cell `json:"cell"`
+	Row  int        `json:"row"`
+	Col  int        `json:"col"`
+	Cell model.Cell `json:"cell"`
 }
 
 type InputPayload struct {
@@ -137,6 +138,7 @@ type SwitchWorkspacePayload struct {
 
 type ListWorkspacesPayload struct {
 	SessionID string `json:"session_id"`
+	Workspace int    `json:"workspace,omitempty"`
 }
 
 type WorkspaceInfo struct {

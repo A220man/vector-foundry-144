@@ -158,6 +158,34 @@ func (c *Client) Split(sessionID, windowID, direction string, ratio float64) err
 	}
 	return nil
 }
+// PaneTree fetches the serialized pane tree of a session's workspace.
+func (c *Client) PaneTree(sessionID string, workspace int) (*ipc.PaneTreePayload, error) {
+	msg := ipc.Message{
+		Type: ipc.MsgPaneTree,
+		Payload: mustMarshal(ipc.ListWorkspacesPayload{
+			SessionID: sessionID,
+			Workspace: workspace,
+		}),
+	}
+	if err := c.ipcConn.Send(msg); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.ipcConn.Recv()
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == ipc.MsgError {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+
+	var tree ipc.PaneTreePayload
+	if err := json.Unmarshal(resp.Payload, &tree); err != nil {
+		return nil, err
+	}
+	return &tree, nil
+}
+
 func (c *Client) handleResize() {
 	ws, err := getWinsize()
 	if err == nil {
@@ -253,14 +281,30 @@ func (c *Client) handlePrefixKey(key byte) {
 		c.ipcConn.Send(ipc.Message{Type: ipc.MsgDetach})
 		close(c.done)
 	case 'c':
-		c.ipcConn.Send(ipc.Message{
-			Type: ipc.MsgCreateWindow,
-			Payload: mustMarshal(map[string]string{
-				"session_id": c.sessionID,
-				"workspace":  "1",
-			}),
-		})
+		c.splitFocused("v", 0.5)
+	case 'h':
+		c.splitFocused("h", 0.5)
+	case 'v':
+		c.splitFocused("v", 0.5)
 	}
+}
+
+// splitFocused splits the pane the client is attached to with the given
+// direction and ratio, then re-fetches the pane tree.
+func (c *Client) splitFocused(direction string, ratio float64) {
+	if c.sessionID == "" || c.windowID == "" {
+		return
+	}
+	if err := c.Split(c.sessionID, c.windowID, direction, ratio); err != nil {
+		fmt.Fprintf(os.Stderr, "split failed: %v\n", err)
+		return
+	}
+	tree, err := c.PaneTree(c.sessionID, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pane tree failed: %v\n", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "pane tree: %s\n", mustMarshal(tree.Root))
 }
 
 func mustMarshal(v interface{}) json.RawMessage {
