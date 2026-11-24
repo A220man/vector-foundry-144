@@ -145,6 +145,8 @@ func (d *Daemon) handleMessage(clientID string, conn *ipc.Conn, msg ipc.Message)
 		return d.handleSwitchWorkspace(clientID, conn, msg)
 	case ipc.MsgListWorkspaces:
 		return d.handleListWorkspaces(clientID, conn, msg)
+	case ipc.MsgPaneTree:
+		return d.handlePaneTree(clientID, conn, msg)
 	default:
 		return fmt.Errorf("unknown message type: %s", msg.Type)
 	}
@@ -832,7 +834,7 @@ func (d *Daemon) handleSplitWindow(clientID string, conn *ipc.Conn, msg ipc.Mess
 	ws.Windows[windowID] = newWindow
 
 	// Find the pane node containing the target window and split it
-	ws.Root = d.splitPaneNode(ws.Root, payload.WindowID, newWindow, payload.Direction == "h", payload.Ratio)
+	ws.Root = d.splitPaneNode(ws.Root, payload.WindowID, newWindow, payload.Direction == "h", splitRatio(payload.Ratio))
 
 	resp := ipc.Message{
 		Type: ipc.MsgOK,
@@ -852,7 +854,7 @@ func (d *Daemon) splitPaneNode(root *model.PaneNode, targetWindowID string, newW
 		return &model.PaneNode{
 			Split: &model.SplitNode{
 				Horizontal: horizontal,
-				Ratio:      ratio,
+				Ratio:      splitRatio(ratio),
 				Children: [2]*model.PaneNode{
 					root,
 					{Leaf: newWindow},
@@ -904,56 +906,36 @@ func (d *Daemon) handleResizePane(clientID string, conn *ipc.Conn, msg ipc.Messa
 }
 
 func (d *Daemon) resizePaneNode(root *model.PaneNode, targetWindowID string, delta int, direction string) *model.PaneNode {
-	if root == nil {
-		return nil
-	}
-
-	if root.Leaf != nil && root.Leaf.ID == targetWindowID {
-		// Can't resize a leaf directly, need to find parent split
+	if root == nil || root.Split == nil {
 		return root
 	}
 
-	if root.Split != nil {
-		// Check if target is in left/top child
-		leftHasTarget := d.paneContains(root.Split.Children[0], targetWindowID)
-		rightHasTarget := d.paneContains(root.Split.Children[1], targetWindowID)
-
-		if leftHasTarget || rightHasTarget {
-			// Adjust ratio
-			if direction == "h" && root.Split.Horizontal {
-				root.Split.Ratio = math.Max(0.1, math.Min(0.9, root.Split.Ratio+float64(delta)/100.0))
-			} else if direction == "v" && !root.Split.Horizontal {
-				root.Split.Ratio = math.Max(0.1, math.Min(0.9, root.Split.Ratio+float64(delta)/100.0))
-			}
-		}
-
-		newChildren := [2]*model.PaneNode{
-			d.resizePaneNode(root.Split.Children[0], targetWindowID, delta, direction),
-			d.resizePaneNode(root.Split.Children[1], targetWindowID, delta, direction),
-		}
-		return &model.PaneNode{
-			Split: &model.SplitNode{
-				Horizontal: root.Split.Horizontal,
-				Ratio:      root.Split.Ratio,
-				Children:   newChildren,
-			},
+	// Only the split whose axis matches the drag direction and that holds the
+	// target pane on one of its sides resizes; the search then stops there.
+	if (direction == "h" && root.Split.Horizontal) || (direction == "v" && !root.Split.Horizontal) {
+		if paneContains(root.Split.Children[0], targetWindowID) || paneContains(root.Split.Children[1], targetWindowID) {
+			root.Split.Ratio = clampRatio(root.Split.Ratio + float64(delta)/100.0)
+			return root
 		}
 	}
 
+	root.Split.Children[0] = d.resizePaneNode(root.Split.Children[0], targetWindowID, delta, direction)
+	root.Split.Children[1] = d.resizePaneNode(root.Split.Children[1], targetWindowID, delta, direction)
 	return root
 }
 
-func (d *Daemon) paneContains(node *model.PaneNode, windowID string) bool {
-	if node == nil {
-		return false
+// clampRatio keeps a split usable: both panes keep at least a tenth of the space.
+func clampRatio(r float64) float64 {
+	return math.Max(0.1, math.Min(0.9, r))
+}
+
+// splitRatio turns a requested ratio into a usable one, defaulting to an even
+// split when the caller sends no ratio (the zero value).
+func splitRatio(r float64) float64 {
+	if r <= 0 {
+		return 0.5
 	}
-	if node.Leaf != nil {
-		return node.Leaf.ID == windowID
-	}
-	if node.Split != nil {
-		return d.paneContains(node.Split.Children[0], windowID) || d.paneContains(node.Split.Children[1], windowID)
-	}
-	return false
+	return clampRatio(r)
 }
 
 func (d *Daemon) handleFocusPane(clientID string, conn *ipc.Conn, msg ipc.Message) error {
@@ -1058,6 +1040,80 @@ func (d *Daemon) handleListWorkspaces(clientID string, conn *ipc.Conn, msg ipc.M
 		}),
 	}
 	return conn.Send(resp)
+}
+
+// paneContains reports whether the pane subtree rooted at n holds windowID.
+func paneContains(n *model.PaneNode, windowID string) bool {
+	if n == nil {
+		return false
+	}
+	if n.Leaf != nil {
+		return n.Leaf.ID == windowID
+	}
+	if n.Split != nil {
+		return paneContains(n.Split.Children[0], windowID) || paneContains(n.Split.Children[1], windowID)
+	}
+	return false
+}
+
+// handlePaneTree answers with the serialized pane tree of one workspace so a
+// client can lay out panes instead of drawing a single full-screen pane.
+func (d *Daemon) handlePaneTree(clientID string, conn *ipc.Conn, msg ipc.Message) error {
+	var payload ipc.ListWorkspacesPayload
+	json.Unmarshal(msg.Payload, &payload)
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	session, ok := d.sessions[payload.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found")
+	}
+
+	wsID := session.ActiveWS
+	if payload.Workspace != 0 {
+		wsID = payload.Workspace
+	}
+	ws := session.Workspaces[wsID]
+	if ws == nil {
+		return fmt.Errorf("workspace not found")
+	}
+
+	resp := ipc.Message{
+		Type: ipc.MsgPaneTree,
+		ID:   msg.ID,
+		Payload: mustMarshal(ipc.PaneTreePayload{
+			SessionID: session.ID,
+			Workspace: wsID,
+			Root:      paneTreeNode(ws.Root, ws.Focused),
+		}),
+	}
+	return conn.Send(resp)
+}
+
+func paneTreeNode(n *model.PaneNode, focused *model.Window) *ipc.PaneTreeNode {
+	if n == nil {
+		return nil
+	}
+	if n.Split != nil {
+		return &ipc.PaneTreeNode{
+			Split: &ipc.SplitNode{
+				Horizontal: n.Split.Horizontal,
+				Ratio:      n.Split.Ratio,
+				Children: [2]*ipc.PaneTreeNode{
+					paneTreeNode(n.Split.Children[0], focused),
+					paneTreeNode(n.Split.Children[1], focused),
+				},
+			},
+		}
+	}
+	if n.Leaf == nil {
+		return nil
+	}
+	return &ipc.PaneTreeNode{
+		WindowID: n.Leaf.ID,
+		Focused:  focused != nil && focused.ID == n.Leaf.ID,
+	}
 }
 
 func mustMarshal(v interface{}) json.RawMessage {
